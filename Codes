@@ -1,0 +1,733 @@
+"""
+@abu_bokkor ⚡ — Word Cloud BEHIND the Subject
+Layers (bottom to top):
+  1. Blurred photo background
+  2. Word cloud
+  3. YOU (sharp subject, GrabCut cutout) on top
+  4. Quote + handle text
+
+pip install wordcloud opencv-python Pillow numpy matplotlib
+"""
+
+import cv2
+import numpy as np
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageEnhance
+from wordcloud import WordCloud
+import matplotlib.pyplot as plt
+import os
+
+# ══════════════════════════════════════════════════════
+# CONFIG
+# ══════════════════════════════════════════════════════
+IMAGE_PATH = r"C:\Users\Abu Bokkor Shiddik\Downloads\576052137-2ca33777-cbba-4e31-80d5-3016c3fd968f.png"
+OUTPUT_JPG = r"C:\Users\Abu Bokkor Shiddik\Downloads\abu_bokkor_FINAL.jpg"
+W, H       = 1080, 1350
+
+WORDS = {
+    "Abu Bokkor":    98,
+    "Knowledge":      95,
+    "Fearless":       95,
+    "Ambition":       90,
+    "Skills":         90,
+    "Research":       88,
+    "Courage":        88,
+    "Academics":      85,
+    "Bold":           85,
+    "Learning":       85,
+    "Drawing":        82,
+    "Creativity":     80,
+    "Hustle":         80,
+    "Passion":        80,
+    "Leadership":     78,
+    "Vision":         78,
+    "Mindset":        76,
+    "Discipline":     76,
+    "Excellence":     78,
+    "Growth":         75,
+    "Focus":          75,
+    "Strength":       72,
+    "Resilience":     70,
+    "Integrity":      70,
+    "Innovation":     74,
+    "Dedication":     72,
+}
+
+QUOTE1  = "Born to stand out."
+QUOTE2  = "Never blend in."
+TAGLINE = "— fearless by nature  ⚡"
+HANDLE  = "@abs"
+
+# ══════════════════════════════════════════════════════
+# FONT LOADER
+# ══════════════════════════════════════════════════════
+def load_font(size, bold=False):
+    paths = (
+        ["C:/Windows/Fonts/Impact.ttf",
+         "C:/Windows/Fonts/georgiab.ttf",
+         "C:/Windows/Fonts/arialbd.ttf"] if bold else
+        ["C:/Windows/Fonts/georgia.ttf",
+         "C:/Windows/Fonts/arial.ttf",
+         "C:/Windows/Fonts/verdana.ttf"]
+    )
+    for p in paths:
+        try:
+            return ImageFont.truetype(p, size)
+        except:
+            pass
+    return ImageFont.load_default()
+
+# ══════════════════════════════════════════════════════
+# 1. LOAD & CROP
+# ══════════════════════════════════════════════════════
+img    = Image.open(IMAGE_PATH).convert("RGB")
+scale  = max(W / img.width, H / img.height)
+nw, nh = int(img.width * scale), int(img.height * scale)
+img    = img.resize((nw, nh), Image.LANCZOS)
+img    = img.crop(((nw-W)//2, (nh-H)//2, (nw-W)//2+W, (nh-H)//2+H))
+print(f"✅ Loaded & cropped: {W}×{H}")
+
+img_np = np.array(img)   # RGB numpy
+
+# ══════════════════════════════════════════════════════
+# 2. GRABCUT — extract subject mask
+# ══════════════════════════════════════════════════════
+print("")
+img_bgr  = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
+mask     = np.zeros((H, W), np.uint8)
+bgModel  = np.zeros((1,65), np.float64)
+fgModel  = np.zeros((1,65), np.float64)
+
+# Rect: assume subject fills centre 90% width, top 5% to bottom 5%
+rect = (int(W*.05), int(H*.02), int(W*.90), int(H*.96))
+cv2.grabCut(img_bgr, mask, rect, bgModel, fgModel, 8, cv2.GC_INIT_WITH_RECT)
+
+# 1,3 = foreground
+fg_mask = np.where((mask==1)|(mask==3), 255, 0).astype(np.uint8)
+
+# Clean up mask edges
+kernel  = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9,9))
+fg_mask = cv2.morphologyEx(fg_mask, cv2.MORPH_CLOSE, kernel, iterations=3)
+fg_mask = cv2.morphologyEx(fg_mask, cv2.MORPH_DILATE, kernel, iterations=2)
+fg_mask = cv2.GaussianBlur(fg_mask, (21,21), 0)   # smooth edges
+
+print("")
+
+# Subject RGBA (sharp, enhanced)
+subject_pil = Image.fromarray(img_np).convert("RGBA")
+subject_pil = ImageEnhance.Contrast(subject_pil).enhance(1.20)
+subject_pil = ImageEnhance.Sharpness(subject_pil).enhance(2.0)
+subject_pil = ImageEnhance.Color(subject_pil).enhance(1.15)
+r,g,b,_     = subject_pil.split()
+alpha_ch    = Image.fromarray(fg_mask)
+subject_pil = Image.merge("RGBA", (r,g,b,alpha_ch))
+
+# ══════════════════════════════════════════════════════
+# 3. BLURRED BACKGROUND (dark)
+# ══════════════════════════════════════════════════════
+blurred = cv2.GaussianBlur(img_bgr, (55,55), 0)
+blurred = cv2.cvtColor(blurred, cv2.COLOR_BGR2RGB)
+bg_pil  = Image.fromarray(blurred).convert("RGBA")
+dark    = Image.new("RGBA", (W,H), (0,0,0,170))
+bg_pil  = Image.alpha_composite(bg_pil, dark)
+print("")
+
+# ══════════════════════════════════════════════════════
+# 4. WORD CLOUD
+# ══════════════════════════════════════════════════════
+print("")
+
+def gold_color(word, font_size, position, orientation, random_state=None, **kwargs):
+    import random
+    palettes = [
+        (212,175,55), (255,255,255), (230,200,100),
+        (200,195,220),(255,220,100), (180,150,40),
+    ]
+    r,g,b = random.choice(palettes)
+    f = random.uniform(0.75, 1.0)
+    return f"rgb({int(r*f)},{int(g*f)},{int(b*f)})"
+
+wc = WordCloud(
+    width            = W,
+    height           = H,
+    background_color = None,
+    mode             = "RGBA",
+    color_func       = gold_color,
+    max_words        = 80,
+    min_font_size    = 20,
+    max_font_size    = 170,
+    prefer_horizontal= 0.65,
+    collocations     = False,
+    relative_scaling = 0.55,
+    margin           = 6,
+).generate_from_frequencies(WORDS)
+
+wc_img = wc.to_image().convert("RGBA")
+
+# Slightly reduce opacity so bg shows through faintly
+wc_arr        = np.array(wc_img, dtype=np.float32)
+wc_arr[:,:,3] *= 0.88
+wc_img        = Image.fromarray(wc_arr.astype(np.uint8))
+
+print("")
+
+# ══════════════════════════════════════════════════════
+# 5. COMPOSITE — correct layer order:
+#    blurred bg → word cloud → subject on top
+# ══════════════════════════════════════════════════════
+canvas = Image.alpha_composite(bg_pil, wc_img)      # bg + cloud
+canvas = Image.alpha_composite(canvas, subject_pil)  # subject ON TOP of cloud
+print("")
+
+# ══════════════════════════════════════════════════════
+# 6. DECORATIVE LINES + TEXT
+# ══════════════════════════════════════════════════════
+draw = ImageDraw.Draw(canvas)
+G    = (212,175,55,160)
+draw.line([(int(W*.08),int(H*.054)),(int(W*.92),int(H*.054))], fill=G, width=1)
+draw.line([(int(W*.08),int(H*.826)),(int(W*.92),int(H*.826))], fill=G, width=1)
+draw.line([(int(W*.08),int(H*.910)),(int(W*.08),int(H*.946))], fill=G, width=3)
+draw.text((int(W*.66),int(H*.040)), "EST. BD  ✦  2024",
+           font=load_font(25), fill=(212,175,55,110))
+
+fq1  = load_font(70, bold=True)
+fq2  = load_font(50)
+ftag = load_font(33)
+fhdl = load_font(44, bold=True)
+
+WHITE  = (255,255,255,255)
+SILVER = (220,218,230,215)
+GOLD   = (212,175,55,255)
+
+def ctext(text, font, y, col, shadow=True):
+    bb = draw.textbbox((0,0), text, font=font)
+    tw = bb[2]-bb[0]; th = bb[3]-bb[1]
+    x  = (W-tw)//2
+    if shadow:
+        for ox,oy in [(3,3),(2,2),(1,1)]:
+            draw.text((x+ox,y+oy), text, font=font, fill=(0,0,0,140))
+    draw.text((x,y), text, font=font, fill=col)
+    return th
+
+yt  = int(H*.836)
+yt += ctext(QUOTE1, fq1, yt, WHITE)  + 14
+yt += ctext(QUOTE2, fq2, yt, SILVER) + 16
+ctext(TAGLINE, ftag, yt, GOLD, shadow=False)
+
+hx,hy = int(W*.105), int(H*.910)
+draw.text((hx+1,hy+1), HANDLE, font=fhdl, fill=(0,0,0,120))
+draw.text((hx,  hy  ), HANDLE, font=fhdl, fill=GOLD)
+print("")
+
+# ══════════════════════════════════════════════════════
+# 7. VIGNETTE
+# ══════════════════════════════════════════════════════
+arr  = np.array(canvas, dtype=np.float32)
+X    = np.linspace(-1,1,W); Y = np.linspace(-1,1,H)
+xx,yy = np.meshgrid(X,Y)
+vmask = 1 - np.clip(np.sqrt(xx**2+yy**2)/np.sqrt(2)*.85,0,1)**1.6
+arr[:,:,:3] *= vmask[:,:,np.newaxis]
+canvas = Image.fromarray(np.clip(arr,0,255).astype(np.uint8))
+
+# ══════════════════════════════════════════════════════
+# 8. SAVE + PREVIEW
+# ══════════════════════════════════════════════════════
+final = canvas.convert("RGB")
+final.save(OUTPUT_JPG, "JPEG", quality=97, optimize=True)
+kb = os.path.getsize(OUTPUT_JPG)/1024
+print(f"\n🎉 Saved → {OUTPUT_JPG}  ({kb:.0f} KB)")
+
+original = Image.open(IMAGE_PATH).convert("RGB")
+fig, axes = plt.subplots(1, 2, figsize=(16,10))
+fig.patch.set_facecolor("#08070F")
+for ax, im, title, col in zip(
+    axes, [original, final],
+    ["", ""],
+    ["#778","#D4AF37"]
+):
+    ax.imshow(im)
+    ax.set_title(title, color=col, fontsize=14, fontweight="bold", pad=12)
+    ax.axis("off")
+plt.suptitle("Word Cloud Behind Subject ⚡",
+             color="#D4AF37", fontsize=17, fontweight="bold")
+plt.tight_layout()
+plt.show()
+print(".")
+
+
+
+
+
+import numpy as np
+import matplotlib.pyplot as plt
+from PIL import Image, ImageEnhance, ImageFilter, ImageDraw, ImageFont
+import cv2
+import os
+
+# ─────────────────────────────────────────────
+# 1. CONFIGURATION — Edit these to your taste
+# ─────────────────────────────────────────────
+IMAGE_PATH   = r"C:\Users\Abu Bokkor Shiddik\Downloads\576052137-2ca33777-cbba-4e31-80d5-3016c3fd968f.png"
+OUTPUT_PATH  = r"C:\Users\Abu Bokkor Shiddik\Downloads\instagram_pro_output.jpg"
+OUTPUT_SIZE  = (1080, 1350)   # Instagram 4:5 portrait (best for feed)
+# OUTPUT_SIZE = (1080, 1080)  # Uncomment for square 1:1
+
+WATERMARK_TEXT = "@abs"   # Set "" to skip watermark
+
+# Tuning knobs (1.0 = original)
+BRIGHTNESS   = 1.08   # Slight lift
+CONTRAST     = 1.18   # Punchier
+SATURATION   = 1.25   # Vivid colours
+SHARPNESS    = 1.60   # Crispy detail
+WARMTH       = 12     # Orange tint (+) or cool tint (-)
+VIGNETTE_STR = 0.55   # Vignette intensity 0–1
+GLOW_OPACITY = 0.18   # Soft glow/bloom 0–1
+SHADOW_LIFT  = 15     # Lift shadows (0 = no change)
+HIGHLIGHT_CL = 240    # Clip highlights below 255 (235–250 typical)
+
+
+# ─────────────────────────────────────────────
+# 2. LOAD IMAGE
+# ─────────────────────────────────────────────
+def load_image(path: str) -> Image.Image:
+    img = Image.open(path).convert("RGB")
+    print(f"")
+    return img
+
+
+# ─────────────────────────────────────────────
+# 3. INSTAGRAM CROP  (smart centre-crop)
+# ─────────────────────────────────────────────
+def smart_crop(img: Image.Image, target: tuple) -> Image.Image:
+    tw, th = target
+    iw, ih = img.size
+    scale  = max(tw / iw, th / ih)
+    new_w, new_h = int(iw * scale), int(ih * scale)
+    img = img.resize((new_w, new_h), Image.LANCZOS)
+    left = (new_w - tw) // 2
+    top  = (new_h - th) // 2
+    img  = img.crop((left, top, left + tw, top + th))
+    print(f"")
+    return img
+
+
+# ─────────────────────────────────────────────
+# 4. BASIC ENHANCEMENTS
+# ─────────────────────────────────────────────
+def basic_enhance(img: Image.Image) -> Image.Image:
+    img = ImageEnhance.Brightness(img).enhance(BRIGHTNESS)
+    img = ImageEnhance.Contrast(img).enhance(CONTRAST)
+    img = ImageEnhance.Color(img).enhance(SATURATION)
+    img = ImageEnhance.Sharpness(img).enhance(SHARPNESS)
+    print("")
+    return img
+
+
+# ─────────────────────────────────────────────
+# 5. CINEMATIC COLOR GRADE
+#    S-curve + shadow lift + highlight clip
+# ─────────────────────────────────────────────
+def build_scurve_lut(shadow_lift: int = 0, highlight_clip: int = 255) -> np.ndarray:
+    """Smooth S-curve lookup table (0–255)."""
+    x = np.arange(256, dtype=np.float32)
+    # normalise
+    x_n = x / 255.0
+    # gentle S-curve via sine
+    y   = 0.5 * (1 + np.sin(np.pi * (x_n - 0.5)))
+    # shadow lift
+    y   = y * (1 - shadow_lift / 255.0) + shadow_lift / 255.0
+    # highlight clip
+    y   = np.clip(y * (highlight_clip / 255.0), 0, 1)
+    return (y * 255).astype(np.uint8)
+
+
+def color_grade(img: Image.Image) -> Image.Image:
+    arr  = np.array(img, dtype=np.float32)
+    lut  = build_scurve_lut(SHADOW_LIFT, HIGHLIGHT_CL)
+
+    # Apply S-curve per channel
+    arr_u8 = np.clip(arr, 0, 255).astype(np.uint8)
+    graded = lut[arr_u8]
+
+    # Warmth shift: boost R, lower B
+    graded = graded.astype(np.float32)
+    graded[:, :, 0] = np.clip(graded[:, :, 0] + WARMTH, 0, 255)   # R
+    graded[:, :, 2] = np.clip(graded[:, :, 2] - WARMTH * 0.6, 0, 255)  # B
+
+    img = Image.fromarray(graded.astype(np.uint8))
+    print("")
+    return img
+
+
+# ─────────────────────────────────────────────
+# 6. VIGNETTE
+# ─────────────────────────────────────────────
+def add_vignette(img: Image.Image, strength: float = 0.5) -> Image.Image:
+    w, h = img.size
+    arr  = np.array(img, dtype=np.float32)
+
+    # Radial gradient (0 = centre, 1 = corner)
+    X = np.linspace(-1, 1, w)
+    Y = np.linspace(-1, 1, h)
+    xx, yy = np.meshgrid(X, Y)
+    radius = np.sqrt(xx**2 + yy**2)
+    radius = radius / radius.max()
+
+    # Smooth falloff
+    mask = 1 - np.clip(radius * strength * 1.4, 0, 1) ** 1.8
+    mask = mask[:, :, np.newaxis]
+
+    arr = arr * mask
+    img = Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8))
+    
+    return img
+
+
+# ─────────────────────────────────────────────
+# 7. SOFT GLOW / BLOOM
+# ─────────────────────────────────────────────
+def add_glow(img: Image.Image, opacity: float = 0.15) -> Image.Image:
+    blurred = img.filter(ImageFilter.GaussianBlur(radius=14))
+    img = Image.blend(img, blurred, alpha=opacity)
+   
+    return img
+
+
+# ─────────────────────────────────────────────
+# 8. SHARPENING PASS  (unsharp mask)
+# ─────────────────────────────────────────────
+def final_sharpen(img: Image.Image) -> Image.Image:
+    img = img.filter(ImageFilter.UnsharpMask(radius=1.5, percent=130, threshold=3))
+    
+    return img
+
+
+# ─────────────────────────────────────────────
+# 9. WATERMARK
+# ─────────────────────────────────────────────
+def add_watermark(img: Image.Image, text: str) -> Image.Image:
+    if not text:
+        return img
+    draw    = ImageDraw.Draw(img)
+    w, h    = img.size
+    font_sz = max(30, w // 28)
+
+    # Try to load a system font, fall back to default
+    try:
+        font = ImageFont.truetype("arial.ttf", font_sz)
+    except Exception:
+        try:
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_sz)
+        except Exception:
+            font = ImageFont.load_default()
+
+    # Measure text
+    bbox = draw.textbbox((0, 0), text, font=font)
+    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    margin = int(h * 0.035)
+    x = w - tw - margin
+    y = h - th - margin
+
+    # Shadow
+    draw.text((x + 2, y + 2), text, font=font, fill=(0, 0, 0, 160))
+    # White text
+    draw.text((x, y), text, font=font, fill=(255, 255, 255, 220))
+    print(f" ")
+    return img
+
+
+# ─────────────────────────────────────────────
+# 10. PREVIEW & SAVE
+# ─────────────────────────────────────────────
+def preview_and_save(original: Image.Image, final: Image.Image, out_path: str):
+    fig, axes = plt.subplots(1, 2, figsize=(16, 9))
+    fig.patch.set_facecolor("#111111")
+
+    for ax, im, title in zip(axes, [original, final], ["ORIGINAL", "EDIT"]):
+        ax.imshow(im)
+        ax.set_title(title, color="white", fontsize=14, fontweight="bold", pad=10)
+        ax.axis("off")
+
+    plt.suptitle("", color="white", fontsize=18, fontweight="bold", y=1.01)
+    plt.tight_layout()
+    plt.show()
+
+    # Save as high-quality JPEG
+    final.save(out_path, "JPEG", quality=97, optimize=True, progressive=True)
+    size_kb = os.path.getsize(out_path) / 1024
+    print(f"\n🎉 Saved!   │ {out_path}")
+    print(f"   File size │ {size_kb:.1f} KB")
+
+
+# ─────────────────────────────────────────────
+# 11. MAIN PIPELINE
+# ─────────────────────────────────────────────
+def main():
+    print("\n" + "═" * 52)
+    
+    print("═" * 52 + "\n")
+
+    original = load_image(IMAGE_PATH)
+
+    img = smart_crop(original.copy(), OUTPUT_SIZE)
+    img = basic_enhance(img)
+    img = color_grade(img)
+    img = add_vignette(img, VIGNETTE_STR)
+    img = add_glow(img, GLOW_OPACITY)
+    img = final_sharpen(img)
+    img = add_watermark(img, WATERMARK_TEXT)
+
+    print("\n" + "─" * 52)
+    preview_and_save(original, img, OUTPUT_PATH)
+    print("─" * 52 + "\n")
+
+
+if __name__ == "__main__":
+    main()
+
+
+"""
+@abu_bokkor ⚡ — Instagram Post with WORD CLOUD background
+- Packed word cloud (like wordle/tagcloud style)
+- Blurred photo as base
+- Your characteristics as the cloud words
+- Quote + handle overlay
+
+pip install wordcloud opencv-python Pillow numpy matplotlib
+"""
+
+import cv2
+import numpy as np
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageEnhance
+from wordcloud import WordCloud
+import matplotlib.pyplot as plt
+import os
+
+# ══════════════════════════════════════════════════════
+# CONFIG
+# ══════════════════════════════════════════════════════
+IMAGE_PATH = r"C:\Users\Abu Bokkor Shiddik\Downloads\576052137-2ca33777-cbba-4e31-80d5-3016c3fd968f.png"
+OUTPUT_JPG = r"C:\Users\Abu Bokkor Shiddik\Downloads\abu_bokkor_FINAL.jpg"
+W, H       = 1080, 1350
+
+# ── Your characteristics — higher number = bigger word ──
+WORDS = {
+    "Knowledge":      90,
+    "Skills":         80,
+    "Research":       70,
+    "Academics":      85,
+    "Drawing":        72,
+    "Creativity":     80,
+    "Leadership":     78,
+    "Discipline":     76,
+    "Fearless":       85,
+    "Bold":           75,
+    "Hustle":         70,
+    "Vision":         78,
+    "Growth":         75,
+    "Learning":       75,
+    "Passion":        80,
+    "Focus":          65,
+    "Strength":       72,
+    "Courage":        88,
+    "Resilience":     70,
+    "Innovation":     74,
+    "Dedication":     72,
+    "Ambition":       80,
+    "Excellence":     78,
+    "Integrity":      70,
+    "Mindset":        70,
+    "Abu Bokkor":     80,  # biggest — your name
+}
+
+QUOTE1  = "Born to stand out."
+QUOTE2  = "Never blend in."
+TAGLINE = "— fearless by nature  ⚡"
+HANDLE  = "@abu_bokkor"
+BLUR_STRENGTH = 41   # background blur intensity
+
+# ══════════════════════════════════════════════════════
+# 1. LOAD & CROP TO 4:5
+# ══════════════════════════════════════════════════════
+img    = Image.open(IMAGE_PATH).convert("RGB")
+scale  = max(W / img.width, H / img.height)
+nw, nh = int(img.width * scale), int(img.height * scale)
+img    = img.resize((nw, nh), Image.LANCZOS)
+img    = img.crop(((nw-W)//2, (nh-H)//2, (nw-W)//2+W, (nh-H)//2+H))
+print(f"")
+
+# ══════════════════════════════════════════════════════
+# 2. BLUR BACKGROUND
+# ══════════════════════════════════════════════════════
+img_cv  = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+blurred = cv2.GaussianBlur(img_cv, (BLUR_STRENGTH, BLUR_STRENGTH), 0)
+blurred = cv2.cvtColor(blurred, cv2.COLOR_BGR2RGB)
+bg_pil  = Image.fromarray(blurred).convert("RGBA")
+
+# Dark overlay so word cloud pops
+dark = Image.new("RGBA", (W, H), (0, 0, 0, 155))
+bg_pil = Image.alpha_composite(bg_pil, dark)
+print("")
+
+# ══════════════════════════════════════════════════════
+# 3. GENERATE WORD CLOUD
+# ══════════════════════════════════════════════════════
+print("")
+
+# Gold-white colour palette for the cloud
+def gold_white_color(word, font_size, position, orientation, random_state=None, **kwargs):
+    palettes = [
+        (212, 175, 55),    # gold
+        (255, 255, 255),   # white
+        (230, 200, 100),   # light gold
+        (200, 195, 220),   # silver white
+        (255, 220, 100),   # warm yellow
+        (180, 150, 40),    # dark gold
+    ]
+    import random
+    r, g, b = random.choice(palettes)
+    # vary brightness slightly
+    factor = random.uniform(0.75, 1.0)
+    return f"rgb({int(r*factor)},{int(g*factor)},{int(b*factor)})"
+
+wc = WordCloud(
+    width        = W,
+    height       = H,
+    background_color = None,     # transparent background
+    mode         = "RGBA",
+    color_func   = gold_white_color,
+    max_words    = 80,
+    min_font_size= 18,
+    max_font_size= 160,
+    prefer_horizontal= 0.7,      # 70% horizontal, 30% vertical words
+    collocations = False,
+    relative_scaling = 0.6,
+    margin       = 8,
+).generate_from_frequencies(WORDS)
+
+# Convert wordcloud to PIL image
+wc_img = wc.to_image().convert("RGBA")
+
+# Make word cloud slightly transparent so bg photo shows through
+wc_arr        = np.array(wc_img, dtype=np.float32)
+wc_arr[:,:,3] *= 0.82          # 82% opacity — background peeks through
+wc_img        = Image.fromarray(wc_arr.astype(np.uint8))
+
+# Composite word cloud onto blurred background
+canvas = Image.alpha_composite(bg_pil, wc_img)
+print("")
+
+# ══════════════════════════════════════════════════════
+# 4. SHARP SUBJECT ON TOP (radial fade blend)
+# ══════════════════════════════════════════════════════
+sharp = Image.fromarray(np.array(img)).convert("RGBA")
+sharp = ImageEnhance.Contrast(sharp).enhance(1.18)
+sharp = ImageEnhance.Sharpness(sharp).enhance(2.0)
+sharp = ImageEnhance.Color(sharp).enhance(1.12)
+
+# Radial mask — sharp in centre, fades to cloud at edges
+arr  = np.array(sharp, dtype=np.float32)
+X    = np.linspace(-1, 1, W); Y = np.linspace(-1, 1, H)
+xx, yy = np.meshgrid(X, Y)
+dist = np.sqrt((xx/0.58)**2 + (yy/0.88)**2)
+fade = np.clip(1 - (dist - 0.50) / 0.50, 0, 1) ** 2.0
+arr[:,:,3] = (fade * 255).astype(np.uint8)
+sharp_masked = Image.fromarray(arr.astype(np.uint8))
+canvas = Image.alpha_composite(canvas, sharp_masked)
+print("")
+
+# ══════════════════════════════════════════════════════
+# 5. FONT LOADER
+# ══════════════════════════════════════════════════════
+def load_font(size, bold=False):
+    paths = (
+        ["C:/Windows/Fonts/Impact.ttf",
+         "C:/Windows/Fonts/georgiab.ttf",
+         "C:/Windows/Fonts/arialbd.ttf"] if bold else
+        ["C:/Windows/Fonts/georgia.ttf",
+         "C:/Windows/Fonts/arial.ttf",
+         "C:/Windows/Fonts/verdana.ttf"]
+    )
+    for p in paths:
+        try:
+            return ImageFont.truetype(p, size)
+        except:
+            pass
+    return ImageFont.load_default()
+
+# ══════════════════════════════════════════════════════
+# 6. GOLD DECORATIVE LINES
+# ══════════════════════════════════════════════════════
+draw = ImageDraw.Draw(canvas)
+G    = (212, 175, 55, 160)
+draw.line([(int(W*.08),int(H*.054)),(int(W*.92),int(H*.054))], fill=G, width=1)
+draw.line([(int(W*.08),int(H*.826)),(int(W*.92),int(H*.826))], fill=G, width=1)
+draw.line([(int(W*.08),int(H*.910)),(int(W*.08),int(H*.946))], fill=G, width=3)
+draw.text((int(W*.66),int(H*.040)), "EST. BD  ✦  2024",
+           font=load_font(25), fill=(212,175,55,110))
+
+# ══════════════════════════════════════════════════════
+# 7. FOREGROUND QUOTE + HANDLE
+# ══════════════════════════════════════════════════════
+fq1  = load_font(70, bold=True)
+fq2  = load_font(50)
+ftag = load_font(33)
+fhdl = load_font(44, bold=True)
+
+WHITE  = (255, 255, 255, 255)
+SILVER = (220, 218, 230, 215)
+GOLD   = (212, 175,  55, 255)
+
+def ctext(text, font, y, col, shadow=True):
+    bb = draw.textbbox((0,0), text, font=font)
+    tw = bb[2]-bb[0]; th = bb[3]-bb[1]
+    x  = (W - tw) // 2
+    if shadow:
+        for ox,oy in [(3,3),(2,2),(1,1)]:
+            draw.text((x+ox,y+oy), text, font=font, fill=(0,0,0,140))
+    draw.text((x,y), text, font=font, fill=col)
+    return th
+
+yt  = int(H * .836)
+yt += ctext(QUOTE1, fq1, yt, WHITE)  + 14
+yt += ctext(QUOTE2, fq2, yt, SILVER) + 16
+ctext(TAGLINE, ftag, yt, GOLD, shadow=False)
+
+hx, hy = int(W*.105), int(H*.910)
+draw.text((hx+1,hy+1), HANDLE, font=fhdl, fill=(0,0,0,120))
+draw.text((hx,  hy  ), HANDLE, font=fhdl, fill=GOLD)
+print("")
+
+# ══════════════════════════════════════════════════════
+# 8. VIGNETTE
+# ══════════════════════════════════════════════════════
+arr  = np.array(canvas, dtype=np.float32)
+X    = np.linspace(-1,1,W); Y = np.linspace(-1,1,H)
+xx,yy = np.meshgrid(X,Y)
+vmask = 1 - np.clip(np.sqrt(xx**2+yy**2)/np.sqrt(2)*0.85, 0, 1)**1.6
+arr[:,:,:3] *= vmask[:,:,np.newaxis]
+canvas = Image.fromarray(np.clip(arr,0,255).astype(np.uint8))
+
+# ══════════════════════════════════════════════════════
+# 9. SAVE + PREVIEW
+# ══════════════════════════════════════════════════════
+final = canvas.convert("RGB")
+final.save(OUTPUT_JPG, "JPEG", quality=97, optimize=True)
+kb = os.path.getsize(OUTPUT_JPG) / 1024
+print(f"\n🎉 Saved → {OUTPUT_JPG}  ({kb:.0f} KB)")
+
+original = Image.open(IMAGE_PATH).convert("RGB")
+fig, axes = plt.subplots(1, 2, figsize=(16, 10))
+fig.patch.set_facecolor("#08070F")
+for ax, im, title, col in zip(
+    axes, [original, final],
+    ["", ""],
+    ["#778", "#D4AF37"]
+):
+    ax.imshow(im)
+    ax.set_title(title, color=col, fontsize=14, fontweight="bold", pad=12)
+    ax.axis("off")
+plt.suptitle("",
+             color="#D4AF37", fontsize=17, fontweight="bold")
+plt.tight_layout()
+plt.show()
+print("")
